@@ -153,7 +153,7 @@ function drawUSMap() {
           <strong>${name} — ${STATE_CROPS[name]}</strong><br>
           Avg NDVI: ${avgNDVI}<br>
           Avg LST Day: ${avgLST} °C<br>
-          Avg Precipitation: ${avgPrecip} mm
+          Avg Total Precipitation: ${avgPrecip} mm
         `, event);
       })
       .on("mousemove", moveTooltip)
