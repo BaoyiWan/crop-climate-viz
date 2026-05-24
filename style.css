@@ -489,3 +489,30 @@ svg {
   .writeup { padding: 24px; }
   .writeup-grid { gap: 16px; }
 }
+
+/* ---------- Scatter filter buttons ---------- */
+
+.scatter-btn-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.scatter-btn {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1.5px solid #ccc;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.scatter-btn:hover {
+  border-color: #3a6ea5;
+}
+
+.scatter-btn.active {
+  border-color: #3a6ea5;
+}

@@ -448,19 +448,41 @@ function drawLineChart() {
 // ── SCATTER ──────────────────────────────────────────────────────────────────
 
 function drawScatter(containerId, xVar) {
-  d3.select(`#${containerId}`).selectAll("*").remove();
+  const wrapper = d3.select(`#${containerId}`);
+  wrapper.selectAll("*").remove();
+
+  // State filter buttons
+  let activeState = "All";
+  const btnRow = wrapper.append("div").attr("class", "scatter-btn-row");
+
+  ["All", "Iowa", "Kansas", "Texas"].forEach(state => {
+    btnRow.append("button")
+      .attr("class", `scatter-btn ${state === "All" ? "active" : ""}`)
+      .attr("data-state", state)
+      .style("background", state === "All" ? "#3a6ea5" : "#f0ede8")
+      .style("color", state === "All" ? "#fff" : "#444")
+      .text(state === "All" ? "All States" : `${state} (${STATE_CROPS[state]})`)
+      .on("click", function() {
+        activeState = state;
+        btnRow.selectAll(".scatter-btn")
+          .style("background", d => d === state ? "#3a6ea5" : "#f0ede8")
+          .style("color", d => d === state ? "#fff" : "#444");
+        // re-bind active class
+        btnRow.selectAll(".scatter-btn").classed("active", d => d === state);
+        updateDots();
+      });
+  });
+
+  // bind data to buttons for click handler
+  btnRow.selectAll(".scatter-btn").data(["All", "Iowa", "Kansas", "Texas"]);
 
   const margin = { top: 20, right: 30, bottom: 55, left: 60 };
-  const outerW = 540, outerH = 380;
+  const outerW = 540, outerH = 360;
   const W = outerW - margin.left - margin.right;
   const H = outerH - margin.top - margin.bottom;
 
-  const svg = d3.select(`#${containerId}`)
-    .append("svg")
-    .attr("viewBox", `0 0 ${outerW} ${outerH}`);
-
-  const g = svg.append("g")
-    .attr("transform", `translate(${margin.left},${margin.top})`);
+  const svg = wrapper.append("svg").attr("viewBox", `0 0 ${outerW} ${outerH}`);
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
   const xExt = d3.extent(allData, d => d[xVar]);
   const xPad = (xExt[1] - xExt[0]) * 0.08;
@@ -470,7 +492,7 @@ function drawScatter(containerId, xVar) {
   const xScale = d3.scaleLinear().domain([xExt[0] - xPad, xExt[1] + xPad]).range([0, W]);
   const yScale = d3.scaleLinear().domain([yExt[0] - yPad, yExt[1] + yPad]).range([H, 0]);
 
-  // X axis with visible ticks and labels
+  // Axes
   g.append("g")
     .attr("transform", `translate(0,${H})`)
     .call(d3.axisBottom(xScale).ticks(7))
@@ -478,7 +500,6 @@ function drawScatter(containerId, xVar) {
     .call(ax => ax.selectAll(".tick line").attr("stroke", "#666"))
     .call(ax => ax.selectAll(".tick text").attr("fill", "#333").attr("font-size", "12px"));
 
-  // Y axis with visible ticks and labels
   g.append("g")
     .call(d3.axisLeft(yScale).ticks(6))
     .call(ax => ax.select(".domain").attr("stroke", "#666"))
@@ -494,38 +515,83 @@ function drawScatter(containerId, xVar) {
     .attr("x", -H / 2).attr("y", -48)
     .attr("text-anchor", "middle").text("NDVI");
 
-  allData.forEach(d => {
-    const color = STATE_COLORS[d.state];
-    g.append("circle")
-      .attr("cx", xScale(d[xVar]))
-      .attr("cy", yScale(d.NDVI))
-      .attr("r", 6)
-      .attr("fill", color)
-      .attr("opacity", 0.75)
-      .attr("stroke", "#fff")
-      .attr("stroke-width", 1)
-      .on("mouseover", function(event) {
-        d3.select(this).attr("r", 9).attr("opacity", 1);
-        showTooltip(`
-          <strong>${d.state} — ${STATE_CROPS[d.state]}</strong><br>
-          Month: ${MONTHS[d.month - 1]}<br>
-          ${VAR_LABELS[xVar]}: ${d[xVar].toFixed(2)}<br>
-          NDVI: ${d.NDVI.toFixed(3)}
-        `, event);
-      })
-      .on("mousemove", moveTooltip)
-      .on("mouseout", function() {
-        d3.select(this).attr("r", 6).attr("opacity", 0.75);
-        hideTooltip();
-      });
+  // NDVI threshold annotations
+  const thresholds = [
+    { y: 0.3, label: "Emergence (0.2–0.4)", color: "#aaa" },
+    { y: 0.7, label: "Peak Greenness (0.6–0.8)", color: "#4caf50" }
+  ];
 
-    g.append("text")
-      .attr("x", xScale(d[xVar]))
-      .attr("y", yScale(d.NDVI) + 4)
-      .attr("text-anchor", "middle")
-      .attr("font-size", 7).attr("font-weight", 700)
-      .attr("fill", "#fff")
-      .attr("pointer-events", "none")
-      .text(MONTHS[d.month - 1].slice(0, 1));
+  thresholds.forEach(t => {
+    if (t.y >= yScale.domain()[0] && t.y <= yScale.domain()[1]) {
+      g.append("line")
+        .attr("x1", 0).attr("x2", W)
+        .attr("y1", yScale(t.y)).attr("y2", yScale(t.y))
+        .attr("stroke", t.color)
+        .attr("stroke-width", 1.2)
+        .attr("stroke-dasharray", "5,4")
+        .attr("opacity", 0.7);
+      g.append("text")
+        .attr("x", W - 4).attr("y", yScale(t.y) - 5)
+        .attr("text-anchor", "end")
+        .attr("fill", t.color)
+        .attr("font-size", 10)
+        .text(t.label);
+    }
   });
+
+  // Dots group
+  const dotsG = g.append("g").attr("class", "dots-group");
+
+  function updateDots() {
+    const filtered = activeState === "All" ? allData : allData.filter(d => d.state === activeState);
+
+    const circles = dotsG.selectAll("circle").data(filtered, d => d.state + d.month);
+    circles.join(
+      enter => enter.append("circle")
+        .attr("cx", d => xScale(d[xVar]))
+        .attr("cy", d => yScale(d.NDVI))
+        .attr("r", 6)
+        .attr("fill", d => STATE_COLORS[d.state])
+        .attr("opacity", 0.75)
+        .attr("stroke", "#fff")
+        .attr("stroke-width", 1)
+        .on("mouseover", function(event, d) {
+          d3.select(this).attr("r", 9).attr("opacity", 1);
+          showTooltip(`
+            <strong>${d.state} — ${STATE_CROPS[d.state]}</strong><br>
+            Month: ${MONTHS[d.month - 1]}<br>
+            ${VAR_LABELS[xVar]}: ${d[xVar].toFixed(2)}<br>
+            NDVI: ${d.NDVI.toFixed(3)}
+          `, event);
+        })
+        .on("mousemove", moveTooltip)
+        .on("mouseout", function() {
+          d3.select(this).attr("r", 6).attr("opacity", 0.75);
+          hideTooltip();
+        }),
+      update => update
+        .attr("cx", d => xScale(d[xVar]))
+        .attr("cy", d => yScale(d.NDVI)),
+      exit => exit.remove()
+    );
+
+    const labels = dotsG.selectAll("text.dot-label").data(filtered, d => d.state + d.month);
+    labels.join(
+      enter => enter.append("text")
+        .attr("class", "dot-label")
+        .attr("x", d => xScale(d[xVar]))
+        .attr("y", d => yScale(d.NDVI) + 4)
+        .attr("text-anchor", "middle")
+        .attr("font-size", 7).attr("font-weight", 700)
+        .attr("fill", "#fff")
+        .attr("pointer-events", "none")
+        .text(d => MONTHS[d.month - 1].slice(0, 1)),
+      update => update
+        .attr("x", d => xScale(d[xVar]))
+        .attr("y", d => yScale(d.NDVI) + 4),
+      exit => exit.remove()
+    );
+  }
+
+  updateDots();
 }
