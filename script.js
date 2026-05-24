@@ -376,17 +376,17 @@ function drawLineChart() {
   const yScale = d3.scaleLinear().domain([yExt[0] - yPad, yExt[1] + yPad]).range([H, 0]);
 
   g.append("g")
-    .call(d3.axisLeft(yScale).ticks(6).tickSize(-W).tickFormat(""))
-    .attr("class", "axis")
-    .call(ax => ax.select(".domain").remove())
-    .call(ax => ax.selectAll("line").attr("stroke", "#eee"));
-
-  g.append("g")
     .attr("transform", `translate(0,${H})`)
     .attr("class", "axis")
-    .call(d3.axisBottom(xScale).ticks(12).tickFormat(i => MONTHS[i - 1]));
+    .call(d3.axisBottom(xScale).ticks(12).tickFormat(i => MONTHS[i - 1]))
+    .call(ax => ax.select(".domain").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick line").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick text").attr("fill", "#333").attr("font-size", "12px"));
 
-  g.append("g").attr("class", "axis").call(d3.axisLeft(yScale).ticks(6));
+  g.append("g").attr("class", "axis").call(d3.axisLeft(yScale).ticks(6))
+    .call(ax => ax.select(".domain").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick line").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick text").attr("fill", "#333").attr("font-size", "12px"));
 
   g.append("text").attr("class", "axis-label")
     .attr("x", W / 2).attr("y", H + 42)
@@ -470,18 +470,20 @@ function drawScatter(containerId, xVar) {
   const xScale = d3.scaleLinear().domain([xExt[0] - xPad, xExt[1] + xPad]).range([0, W]);
   const yScale = d3.scaleLinear().domain([yExt[0] - yPad, yExt[1] + yPad]).range([H, 0]);
 
-  g.append("g")
-    .call(d3.axisLeft(yScale).ticks(6).tickSize(-W).tickFormat(""))
-    .attr("class", "axis")
-    .call(ax => ax.select(".domain").remove())
-    .call(ax => ax.selectAll("line").attr("stroke", "#eee"));
-
+  // X axis with visible ticks and labels
   g.append("g")
     .attr("transform", `translate(0,${H})`)
-    .attr("class", "axis")
-    .call(d3.axisBottom(xScale).ticks(7));
+    .call(d3.axisBottom(xScale).ticks(7))
+    .call(ax => ax.select(".domain").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick line").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick text").attr("fill", "#333").attr("font-size", "12px"));
 
-  g.append("g").attr("class", "axis").call(d3.axisLeft(yScale).ticks(6));
+  // Y axis with visible ticks and labels
+  g.append("g")
+    .call(d3.axisLeft(yScale).ticks(6))
+    .call(ax => ax.select(".domain").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick line").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick text").attr("fill", "#333").attr("font-size", "12px"));
 
   g.append("text").attr("class", "axis-label")
     .attr("x", W / 2).attr("y", H + 46)
