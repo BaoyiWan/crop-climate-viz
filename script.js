@@ -1,4 +1,5 @@
-const dataFile = "data/final_project_data.csv";
+const dataFile        = "data/final_project_data.csv";
+const countyDataFile  = "data/county_data.csv";
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -29,39 +30,61 @@ const VAR_LABELS = {
 
 const tooltip = d3.select("#tooltip");
 
-let allData = [];
-let currentVar = "LST_Day";
+let allData    = [];
+let countyData = [];
+let currentVar   = "LST_Day";
 let currentMonth = 7;
-let redrawTimer = null;
+let usTopoCache  = null;
+
+// ── GEO CACHE ────────────────────────────────────────────────────────────────
+
+function getUsTopo() {
+  if (usTopoCache) return Promise.resolve(usTopoCache);
+  return d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json").then(us => {
+    usTopoCache = us;
+    return us;
+  });
+}
 
 // ── LOAD DATA ────────────────────────────────────────────────────────────────
 
-d3.csv(dataFile, d => ({
-  state:         d.state,
-  month:         +d.month,
-  NDVI:          +d.NDVI,
-  LST_Day:       +d.LST_Day,
-  LST_Night:     +d.LST_Night,
-  Precipitation: +d.Precipitation,
-  state_crop:    d.state_crop
-})).then(data => {
-  allData = data;
+Promise.all([
+  d3.csv(dataFile, d => ({
+    state:         d.state,
+    month:         +d.month,
+    NDVI:          +d.NDVI,
+    LST_Day:       +d.LST_Day,
+    LST_Night:     +d.LST_Night,
+    Precipitation: +d.Precipitation,
+    state_crop:    d.state_crop
+  })),
+  d3.csv(countyDataFile, d => ({
+    GEOID:         d.GEOID,
+    county:        d.county,
+    state:         d.state,
+    month:         +d.month,
+    NDVI:          +d.NDVI,
+    LST_Day:       +d.LST_Day,
+    LST_Night:     +d.LST_Night,
+    Precipitation: +d.Precipitation,
+    state_crop:    d.state_crop
+  })),
+  getUsTopo()
+]).then(([stateData, cData]) => {
+  allData    = stateData;
+  countyData = cData;
 
   drawUSMap();
   drawChoropleth();
   drawLineChart();
-  drawScatter("scatter-lst",   "LST_Day");
-  drawScatter("scatter-precip","Precipitation");
+  drawScatter("scatter-lst",    "LST_Day");
+  drawScatter("scatter-precip", "Precipitation");
 
-  // Controls
   d3.select("#variable-select").on("change", function() {
     currentVar = this.value;
-    clearTimeout(redrawTimer);
-    redrawTimer = setTimeout(() => {
-      updateChoroTitles();
-      drawChoropleth();
-      drawLineChart();
-    }, 100);
+    updateChoroTitles();
+    drawChoropleth();
+    drawLineChart();
   });
 
   d3.select("#month-slider").on("input", function() {
@@ -81,19 +104,17 @@ function showTooltip(html, event) {
     .style("left", (event.pageX + 14) + "px")
     .style("top",  (event.pageY - 28) + "px");
 }
-
 function moveTooltip(event) {
   tooltip
     .style("left", (event.pageX + 14) + "px")
     .style("top",  (event.pageY - 28) + "px");
 }
-
 function hideTooltip() {
   tooltip.style("opacity", 0);
 }
 
 function colorScaleFor(variable) {
-  const extent = d3.extent(allData, d => d[variable]);
+  const extent = d3.extent(countyData, d => d[variable]);
   if (variable === "NDVI")
     return d3.scaleSequential(d3.interpolateGreens).domain(extent);
   if (variable.startsWith("LST"))
@@ -111,6 +132,7 @@ function updateChoroTitles() {
 // ── US MAP ───────────────────────────────────────────────────────────────────
 
 function drawUSMap() {
+  const us = usTopoCache;
   const container = document.getElementById("us-map");
   const W = container.clientWidth || 860;
   const H = Math.round(W * 0.56);
@@ -122,70 +144,66 @@ function drawUSMap() {
     .attr("viewBox", `0 0 ${W} ${H}`)
     .attr("class", "map-svg");
 
-  d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json").then(us => {
-    const states = topojson.feature(us, us.objects.states);
-    const projection = d3.geoAlbersUsa().fitSize([W, H], states);
-    const path = d3.geoPath().projection(projection);
+  const states = topojson.feature(us, us.objects.states);
+  const projection = d3.geoAlbersUsa().fitSize([W, H], states);
+  const path = d3.geoPath().projection(projection);
 
-    const fipsToState = {};
-    Object.entries(STATE_FIPS).forEach(([s, id]) => fipsToState[id] = s);
+  const fipsToState = {};
+  Object.entries(STATE_FIPS).forEach(([s, id]) => fipsToState[id] = s);
 
-    svg.selectAll("path")
-      .data(states.features)
-      .join("path")
-      .attr("d", path)
-      .attr("class", d => {
-        const id = String(d.id).padStart(2, "0");
-        if (id === "19") return "state-iowa";
-        if (id === "20") return "state-kansas";
-        if (id === "48") return "state-texas";
-        return "state-default";
-      })
-      .on("mouseover", function(event, d) {
-        const id = String(d.id).padStart(2, "0");
-        const name = fipsToState[id];
-        if (!name) return;
-        const rows = allData.filter(r => r.state === name);
-        const avgNDVI = d3.mean(rows, r => r.NDVI).toFixed(3);
-        const avgLST  = d3.mean(rows, r => r.LST_Day).toFixed(1);
-        const avgPrecip = d3.mean(rows, r => r.Precipitation).toFixed(1);
-        showTooltip(`
-          <strong>${name} — ${STATE_CROPS[name]}</strong><br>
-          Avg NDVI: ${avgNDVI}<br>
-          Avg LST Day: ${avgLST} °C<br>
-          Avg Total Precipitation: ${avgPrecip} mm
-        `, event);
-      })
-      .on("mousemove", moveTooltip)
-      .on("mouseout", hideTooltip);
-
-    // State labels
-    states.features.forEach(f => {
-      const id = String(f.id).padStart(2, "0");
+  svg.selectAll("path")
+    .data(states.features)
+    .join("path")
+    .attr("d", path)
+    .attr("class", d => {
+      const id = String(d.id).padStart(2, "0");
+      if (id === "19") return "state-iowa";
+      if (id === "20") return "state-kansas";
+      if (id === "48") return "state-texas";
+      return "state-default";
+    })
+    .on("mouseover", function(event, d) {
+      const id = String(d.id).padStart(2, "0");
       const name = fipsToState[id];
       if (!name) return;
-      const c = path.centroid(f);
-      if (!c || isNaN(c[0])) return;
-      svg.append("text")
-        .attr("x", c[0]).attr("y", c[1] - 4)
-        .attr("text-anchor", "middle")
-        .attr("fill", STATE_COLORS[name])
-        .attr("font-size", 13)
-        .attr("font-weight", 700)
-        .attr("pointer-events", "none")
-        .text(name);
-      svg.append("text")
-        .attr("x", c[0]).attr("y", c[1] + 12)
-        .attr("text-anchor", "middle")
-        .attr("fill", STATE_COLORS[name])
-        .attr("font-size", 10)
-        .attr("pointer-events", "none")
-        .text(STATE_CROPS[name]);
-    });
+      const rows = allData.filter(r => r.state === name);
+      const avgNDVI   = d3.mean(rows, r => r.NDVI).toFixed(3);
+      const avgLST    = d3.mean(rows, r => r.LST_Day).toFixed(1);
+      const avgPrecip = d3.mean(rows, r => r.Precipitation).toFixed(1);
+      showTooltip(`
+        <strong>${name} — ${STATE_CROPS[name]}</strong><br>
+        Avg NDVI: ${avgNDVI}<br>
+        Avg LST Day: ${avgLST} °C<br>
+        Avg Precipitation: ${avgPrecip} mm
+      `, event);
+    })
+    .on("mousemove", moveTooltip)
+    .on("mouseout", hideTooltip);
+
+  states.features.forEach(f => {
+    const id = String(f.id).padStart(2, "0");
+    const name = fipsToState[id];
+    if (!name) return;
+    const c = path.centroid(f);
+    if (!c || isNaN(c[0])) return;
+    svg.append("text")
+      .attr("x", c[0]).attr("y", c[1] - 4)
+      .attr("text-anchor", "middle")
+      .attr("fill", STATE_COLORS[name])
+      .attr("font-size", 13).attr("font-weight", 700)
+      .attr("pointer-events", "none")
+      .text(name);
+    svg.append("text")
+      .attr("x", c[0]).attr("y", c[1] + 12)
+      .attr("text-anchor", "middle")
+      .attr("fill", STATE_COLORS[name])
+      .attr("font-size", 10)
+      .attr("pointer-events", "none")
+      .text(STATE_CROPS[name]);
   });
 }
 
-// ── CHOROPLETH ───────────────────────────────────────────────────────────────
+// ── CHOROPLETH (county level) ─────────────────────────────────────────────────
 
 function drawChoropleth() {
   renderChoro("choro-left",  "legend-left",  currentVar, currentMonth);
@@ -193,143 +211,153 @@ function drawChoropleth() {
 }
 
 function renderChoro(containerId, legendId, variable, month) {
+  const us = usTopoCache;
+  if (!us) return;
+
+  d3.select(`#${containerId}`).selectAll("*").remove();
+  d3.select(`#${legendId}`).selectAll("*").remove();
+
   const container = document.getElementById(containerId);
   const W = container.clientWidth || 460;
-  const H = Math.round(W * 0.65);
+  const H = Math.round(W * 0.7);
 
   const colorScale = colorScaleFor(variable);
-  const extent = d3.extent(allData, d => d[variable]);
+  const extent = d3.extent(countyData, d => d[variable]);
 
-  let svg = d3.select(`#${containerId}`).select("svg");
-  const isFirst = svg.empty();
+  // Get county and state features
+  const allCounties = topojson.feature(us, us.objects.counties);
+  const allStates   = topojson.feature(us, us.objects.states);
 
-  if (isFirst) {
-    svg = d3.select(`#${containerId}`)
-      .append("svg")
-      .attr("viewBox", `0 0 ${W} ${H}`)
-      .attr("class", "choro-svg");
-  }
+  const targetStateFips = new Set(Object.values(STATE_FIPS));
 
-  d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json").then(us => {
-    const allStates = topojson.feature(us, us.objects.states);
-    const targetIds = new Set(Object.values(STATE_FIPS));
-    const threeStates = allStates.features.filter(f =>
-      targetIds.has(String(f.id).padStart(2, "0"))
-    );
-
-    const fipsToState = {};
-    Object.entries(STATE_FIPS).forEach(([s, id]) => fipsToState[id] = s);
-
-    const projection = d3.geoAlbersUsa()
-      .fitSize([W - 20, H - 20], { type: "FeatureCollection", features: threeStates });
-    projection.translate([
-      projection.translate()[0] + 10,
-      projection.translate()[1] + 10
-    ]);
-    const path = d3.geoPath().projection(projection);
-
-    svg.selectAll("path.state-shape")
-      .data(threeStates, d => d.id)
-      .join("path")
-      .attr("class", "state-shape")
-      .attr("d", path)
-      .attr("stroke", "#fff")
-      .attr("stroke-width", 1.2)
-      .attr("fill", f => {
-        const id = String(f.id).padStart(2, "0");
-        const name = fipsToState[id];
-        const row = allData.find(d => d.state === name && d.month === month);
-        return row ? colorScale(row[variable]) : "#ccc";
-      })
-      .on("mouseover", function(event, f) {
-        const id = String(f.id).padStart(2, "0");
-        const name = fipsToState[id];
-        const row = allData.find(d => d.state === name && d.month === month);
-        if (!row) return;
-        showTooltip(`
-          <strong>${name} — ${STATE_CROPS[name]}</strong><br>
-          ${VAR_LABELS[variable]}: ${row[variable].toFixed(2)}<br>
-          Month: ${MONTHS[month - 1]}
-        `, event);
-      })
-      .on("mousemove", moveTooltip)
-      .on("mouseout", hideTooltip);
-
-    if (isFirst) {
-      threeStates.forEach(f => {
-        const id = String(f.id).padStart(2, "0");
-        const name = fipsToState[id];
-        const row = allData.find(d => d.state === name && d.month === month);
-        const c = path.centroid(f);
-        if (!c || isNaN(c[0])) return;
-        svg.append("text")
-          .attr("class", `label-state-${id}`)
-          .attr("x", c[0]).attr("y", c[1] - 4)
-          .attr("text-anchor", "middle")
-          .attr("fill", "#fff").attr("font-size", 11).attr("font-weight", 700)
-          .attr("pointer-events", "none")
-          .text(name);
-        if (row) {
-          svg.append("text")
-            .attr("class", `label-value-${id}`)
-            .attr("x", c[0]).attr("y", c[1] + 10)
-            .attr("text-anchor", "middle")
-            .attr("fill", "rgba(255,255,255,0.9)").attr("font-size", 9)
-            .attr("pointer-events", "none")
-            .text(row[variable].toFixed(1));
-        }
-      });
-    } else {
-      threeStates.forEach(f => {
-        const id = String(f.id).padStart(2, "0");
-        const name = fipsToState[id];
-        const row = allData.find(d => d.state === name && d.month === month);
-        svg.select(`.label-value-${id}`)
-          .text(row ? row[variable].toFixed(1) : "");
-      });
-    }
-
-    // Update or create legend
-    d3.select(`#${legendId}`).selectAll("*").remove();
-    const lW = Math.min(W - 40, 300), lH = 12;
-    const legendSvg = d3.select(`#${legendId}`)
-      .append("svg")
-      .attr("viewBox", `0 0 ${W} 36`);
-
-    const defs = legendSvg.append("defs");
-    const gradId = `grad-${containerId}`;
-    const grad = defs.append("linearGradient").attr("id", gradId);
-    for (let i = 0; i <= 10; i++) {
-      grad.append("stop")
-        .attr("offset", `${i * 10}%`)
-        .attr("stop-color", colorScale(extent[0] + (extent[1] - extent[0]) * i / 10));
-    }
-    legendSvg.append("rect")
-      .attr("x", 20).attr("y", 4)
-      .attr("width", lW).attr("height", lH)
-      .attr("rx", 4).attr("fill", `url(#${gradId})`);
-    legendSvg.append("text")
-      .attr("x", 20).attr("y", 30)
-      .attr("fill", "#777").attr("font-size", 10)
-      .text(extent[0].toFixed(1));
-    legendSvg.append("text")
-      .attr("x", 20 + lW).attr("y", 30)
-      .attr("fill", "#777").attr("font-size", 10).attr("text-anchor", "end")
-      .text(extent[1].toFixed(1));
+  // Filter counties belonging to our 3 states
+  const threeCounties = allCounties.features.filter(f => {
+    const statefp = String(f.id).padStart(5, "0").slice(0, 2);
+    return targetStateFips.has(statefp);
   });
+
+  // Filter state borders for our 3 states
+  const threeStates = allStates.features.filter(f =>
+    targetStateFips.has(String(f.id).padStart(2, "0"))
+  );
+
+  // Build county data lookup: GEOID -> value
+  const monthRows = countyData.filter(d => d.month === month);
+  const lookup = {};
+  monthRows.forEach(d => { lookup[d.GEOID] = d; });
+
+  const svg = d3.select(`#${containerId}`)
+    .append("svg")
+    .attr("viewBox", `0 0 ${W} ${H}`)
+    .attr("class", "choro-svg");
+
+  const projection = d3.geoAlbersUsa()
+    .fitSize([W - 10, H - 10], { type: "FeatureCollection", features: threeStates });
+  projection.translate([
+    projection.translate()[0] + 5,
+    projection.translate()[1] + 5
+  ]);
+  const path = d3.geoPath().projection(projection);
+
+  // Draw counties
+  svg.selectAll("path.county")
+    .data(threeCounties)
+    .join("path")
+    .attr("class", "county")
+    .attr("d", path)
+    .attr("fill", f => {
+      const geoid = String(f.id).padStart(5, "0");
+      const row = lookup[geoid];
+      return row ? colorScale(row[variable]) : "#ddd";
+    })
+    .attr("stroke", "#fff")
+    .attr("stroke-width", 0.3)
+    .on("mouseover", function(event, f) {
+      const geoid = String(f.id).padStart(5, "0");
+      const row = lookup[geoid];
+      if (!row) return;
+      d3.select(this).attr("stroke-width", 1.5).attr("stroke", "#333");
+      showTooltip(`
+        <strong>${row.county}, ${row.state}</strong><br>
+        ${VAR_LABELS[variable]}: ${row[variable].toFixed(2)}<br>
+        Month: ${MONTHS[month - 1]}
+      `, event);
+    })
+    .on("mousemove", moveTooltip)
+    .on("mouseout", function() {
+      d3.select(this).attr("stroke-width", 0.3).attr("stroke", "#fff");
+      hideTooltip();
+    });
+
+  // Draw state borders on top
+  svg.selectAll("path.state-border")
+    .data(threeStates)
+    .join("path")
+    .attr("class", "state-border")
+    .attr("d", path)
+    .attr("fill", "none")
+    .attr("stroke", "#333")
+    .attr("stroke-width", 1.5)
+    .attr("pointer-events", "none");
+
+  // State labels
+  threeStates.forEach(f => {
+    const id = String(f.id).padStart(2, "0");
+    const name = Object.entries(STATE_FIPS).find(([s, fip]) => fip === id)?.[0];
+    if (!name) return;
+    const c = path.centroid(f);
+    if (!c || isNaN(c[0])) return;
+    svg.append("text")
+      .attr("x", c[0]).attr("y", c[1])
+      .attr("text-anchor", "middle")
+      .attr("fill", "#222").attr("font-size", 12).attr("font-weight", 700)
+      .attr("pointer-events", "none")
+      .text(name);
+    svg.append("text")
+      .attr("x", c[0]).attr("y", c[1] + 14)
+      .attr("text-anchor", "middle")
+      .attr("fill", "#555").attr("font-size", 9)
+      .attr("pointer-events", "none")
+      .text(STATE_CROPS[name]);
+  });
+
+  // Legend bar
+  const lW = Math.min(W - 40, 300), lH = 12;
+  const legendSvg = d3.select(`#${legendId}`)
+    .append("svg")
+    .attr("viewBox", `0 0 ${W} 36`);
+
+  const defs = legendSvg.append("defs");
+  const gradId = `grad-${containerId}`;
+  const grad = defs.append("linearGradient").attr("id", gradId);
+  for (let i = 0; i <= 10; i++) {
+    grad.append("stop")
+      .attr("offset", `${i * 10}%`)
+      .attr("stop-color", colorScale(extent[0] + (extent[1] - extent[0]) * i / 10));
+  }
+  legendSvg.append("rect")
+    .attr("x", 20).attr("y", 4)
+    .attr("width", lW).attr("height", lH)
+    .attr("rx", 4).attr("fill", `url(#${gradId})`);
+  legendSvg.append("text")
+    .attr("x", 20).attr("y", 30)
+    .attr("fill", "#777").attr("font-size", 10)
+    .text(extent[0].toFixed(1));
+  legendSvg.append("text")
+    .attr("x", 20 + lW).attr("y", 30)
+    .attr("fill", "#777").attr("font-size", 10).attr("text-anchor", "end")
+    .text(extent[1].toFixed(1));
 }
 
 // ── LINE CHART ───────────────────────────────────────────────────────────────
 
 function drawLineChart() {
   const variable = currentVar;
-
   const margin = { top: 20, right: 30, bottom: 50, left: 60 };
   const outerW = 860, outerH = 380;
   const W = outerW - margin.left - margin.right;
   const H = outerH - margin.top - margin.bottom;
 
-  // Create SVG only once, reuse on updates to prevent layout flash
   let svg = d3.select("#line-chart").select("svg");
   if (svg.empty()) {
     svg = d3.select("#line-chart")
@@ -347,24 +375,19 @@ function drawLineChart() {
   const yPad = (yExt[1] - yExt[0]) * 0.1;
   const yScale = d3.scaleLinear().domain([yExt[0] - yPad, yExt[1] + yPad]).range([H, 0]);
 
-  // Grid lines
-  g.append("g")
-    .call(d3.axisLeft(yScale).ticks(6).tickSize(-W).tickFormat(""))
-    .attr("class", "axis")
-    .call(ax => ax.select(".domain").remove())
-    .call(ax => ax.selectAll("line").attr("stroke", "#eee"));
-
-  // Axes
   g.append("g")
     .attr("transform", `translate(0,${H})`)
     .attr("class", "axis")
-    .call(d3.axisBottom(xScale).ticks(12).tickFormat(i => MONTHS[i - 1]));
+    .call(d3.axisBottom(xScale).ticks(12).tickFormat(i => MONTHS[i - 1]))
+    .call(ax => ax.select(".domain").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick line").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick text").attr("fill", "#333").attr("font-size", "12px"));
 
-  g.append("g")
-    .attr("class", "axis")
-    .call(d3.axisLeft(yScale).ticks(6));
+  g.append("g").attr("class", "axis").call(d3.axisLeft(yScale).ticks(6))
+    .call(ax => ax.select(".domain").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick line").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick text").attr("fill", "#333").attr("font-size", "12px"));
 
-  // Axis labels
   g.append("text").attr("class", "axis-label")
     .attr("x", W / 2).attr("y", H + 42)
     .attr("text-anchor", "middle").text("Month");
@@ -412,7 +435,6 @@ function drawLineChart() {
       });
   });
 
-  // Legend
   const legend = g.append("g").attr("transform", `translate(${W - 180}, 10)`);
   ["Iowa", "Kansas", "Texas"].forEach((state, i) => {
     const item = legend.append("g").attr("transform", `translate(0, ${i * 22})`);
@@ -426,19 +448,41 @@ function drawLineChart() {
 // ── SCATTER ──────────────────────────────────────────────────────────────────
 
 function drawScatter(containerId, xVar) {
-  d3.select(`#${containerId}`).selectAll("*").remove();
+  const wrapper = d3.select(`#${containerId}`);
+  wrapper.selectAll("*").remove();
+
+  // State filter buttons
+  let activeState = "All";
+  const btnRow = wrapper.append("div").attr("class", "scatter-btn-row");
+
+  ["All", "Iowa", "Kansas", "Texas"].forEach(state => {
+    btnRow.append("button")
+      .attr("class", `scatter-btn ${state === "All" ? "active" : ""}`)
+      .attr("data-state", state)
+      .style("background", state === "All" ? "#3a6ea5" : "#f0ede8")
+      .style("color", state === "All" ? "#fff" : "#444")
+      .text(state === "All" ? "All States" : `${state} (${STATE_CROPS[state]})`)
+      .on("click", function() {
+        activeState = state;
+        btnRow.selectAll(".scatter-btn")
+          .style("background", d => d === state ? "#3a6ea5" : "#f0ede8")
+          .style("color", d => d === state ? "#fff" : "#444");
+        // re-bind active class
+        btnRow.selectAll(".scatter-btn").classed("active", d => d === state);
+        updateDots();
+      });
+  });
+
+  // bind data to buttons for click handler
+  btnRow.selectAll(".scatter-btn").data(["All", "Iowa", "Kansas", "Texas"]);
 
   const margin = { top: 20, right: 30, bottom: 55, left: 60 };
-  const outerW = 540, outerH = 380;
+  const outerW = 540, outerH = 360;
   const W = outerW - margin.left - margin.right;
   const H = outerH - margin.top - margin.bottom;
 
-  const svg = d3.select(`#${containerId}`)
-    .append("svg")
-    .attr("viewBox", `0 0 ${outerW} ${outerH}`);
-
-  const g = svg.append("g")
-    .attr("transform", `translate(${margin.left},${margin.top})`);
+  const svg = wrapper.append("svg").attr("viewBox", `0 0 ${outerW} ${outerH}`);
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
   const xExt = d3.extent(allData, d => d[xVar]);
   const xPad = (xExt[1] - xExt[0]) * 0.08;
@@ -448,21 +492,19 @@ function drawScatter(containerId, xVar) {
   const xScale = d3.scaleLinear().domain([xExt[0] - xPad, xExt[1] + xPad]).range([0, W]);
   const yScale = d3.scaleLinear().domain([yExt[0] - yPad, yExt[1] + yPad]).range([H, 0]);
 
-  // Grid
-  g.append("g")
-    .call(d3.axisLeft(yScale).ticks(6).tickSize(-W).tickFormat(""))
-    .attr("class", "axis")
-    .call(ax => ax.select(".domain").remove())
-    .call(ax => ax.selectAll("line").attr("stroke", "#eee"));
-
+  // Axes
   g.append("g")
     .attr("transform", `translate(0,${H})`)
-    .attr("class", "axis")
-    .call(d3.axisBottom(xScale).ticks(7));
+    .call(d3.axisBottom(xScale).ticks(7))
+    .call(ax => ax.select(".domain").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick line").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick text").attr("fill", "#333").attr("font-size", "12px"));
 
   g.append("g")
-    .attr("class", "axis")
-    .call(d3.axisLeft(yScale).ticks(6));
+    .call(d3.axisLeft(yScale).ticks(6))
+    .call(ax => ax.select(".domain").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick line").attr("stroke", "#666"))
+    .call(ax => ax.selectAll(".tick text").attr("fill", "#333").attr("font-size", "12px"));
 
   g.append("text").attr("class", "axis-label")
     .attr("x", W / 2).attr("y", H + 46)
@@ -473,41 +515,83 @@ function drawScatter(containerId, xVar) {
     .attr("x", -H / 2).attr("y", -48)
     .attr("text-anchor", "middle").text("NDVI");
 
-  // Dots
-  allData.forEach(d => {
-    const color = STATE_COLORS[d.state];
-    g.append("circle")
-      .attr("cx", xScale(d[xVar]))
-      .attr("cy", yScale(d.NDVI))
-      .attr("r", 6)
-      .attr("fill", color)
-      .attr("opacity", 0.75)
-      .attr("stroke", "#fff")
-      .attr("stroke-width", 1)
-      .on("mouseover", function(event) {
-        d3.select(this).attr("r", 9).attr("opacity", 1);
-        showTooltip(`
-          <strong>${d.state} — ${STATE_CROPS[d.state]}</strong><br>
-          Month: ${MONTHS[d.month - 1]}<br>
-          ${VAR_LABELS[xVar]}: ${d[xVar].toFixed(2)}<br>
-          NDVI: ${d.NDVI.toFixed(3)}
-        `, event);
-      })
-      .on("mousemove", moveTooltip)
-      .on("mouseout", function() {
-        d3.select(this).attr("r", 6).attr("opacity", 0.75);
-        hideTooltip();
-      });
+  // NDVI threshold annotations
+  const thresholds = [
+    { y: 0.3, label: "Emergence (0.2–0.4)", color: "#aaa" },
+    { y: 0.7, label: "Peak Greenness (0.6–0.8)", color: "#4caf50" }
+  ];
 
-    // Month initial label
-    g.append("text")
-      .attr("x", xScale(d[xVar]))
-      .attr("y", yScale(d.NDVI) + 4)
-      .attr("text-anchor", "middle")
-      .attr("font-size", 7)
-      .attr("font-weight", 700)
-      .attr("fill", "#fff")
-      .attr("pointer-events", "none")
-      .text(MONTHS[d.month - 1].slice(0, 1));
+  thresholds.forEach(t => {
+    if (t.y >= yScale.domain()[0] && t.y <= yScale.domain()[1]) {
+      g.append("line")
+        .attr("x1", 0).attr("x2", W)
+        .attr("y1", yScale(t.y)).attr("y2", yScale(t.y))
+        .attr("stroke", t.color)
+        .attr("stroke-width", 1.2)
+        .attr("stroke-dasharray", "5,4")
+        .attr("opacity", 0.7);
+      g.append("text")
+        .attr("x", W - 4).attr("y", yScale(t.y) - 5)
+        .attr("text-anchor", "end")
+        .attr("fill", t.color)
+        .attr("font-size", 10)
+        .text(t.label);
+    }
   });
+
+  // Dots group
+  const dotsG = g.append("g").attr("class", "dots-group");
+
+  function updateDots() {
+    const filtered = activeState === "All" ? allData : allData.filter(d => d.state === activeState);
+
+    const circles = dotsG.selectAll("circle").data(filtered, d => d.state + d.month);
+    circles.join(
+      enter => enter.append("circle")
+        .attr("cx", d => xScale(d[xVar]))
+        .attr("cy", d => yScale(d.NDVI))
+        .attr("r", 6)
+        .attr("fill", d => STATE_COLORS[d.state])
+        .attr("opacity", 0.75)
+        .attr("stroke", "#fff")
+        .attr("stroke-width", 1)
+        .on("mouseover", function(event, d) {
+          d3.select(this).attr("r", 9).attr("opacity", 1);
+          showTooltip(`
+            <strong>${d.state} — ${STATE_CROPS[d.state]}</strong><br>
+            Month: ${MONTHS[d.month - 1]}<br>
+            ${VAR_LABELS[xVar]}: ${d[xVar].toFixed(2)}<br>
+            NDVI: ${d.NDVI.toFixed(3)}
+          `, event);
+        })
+        .on("mousemove", moveTooltip)
+        .on("mouseout", function() {
+          d3.select(this).attr("r", 6).attr("opacity", 0.75);
+          hideTooltip();
+        }),
+      update => update
+        .attr("cx", d => xScale(d[xVar]))
+        .attr("cy", d => yScale(d.NDVI)),
+      exit => exit.remove()
+    );
+
+    const labels = dotsG.selectAll("text.dot-label").data(filtered, d => d.state + d.month);
+    labels.join(
+      enter => enter.append("text")
+        .attr("class", "dot-label")
+        .attr("x", d => xScale(d[xVar]))
+        .attr("y", d => yScale(d.NDVI) + 4)
+        .attr("text-anchor", "middle")
+        .attr("font-size", 7).attr("font-weight", 700)
+        .attr("fill", "#fff")
+        .attr("pointer-events", "none")
+        .text(d => MONTHS[d.month - 1].slice(0, 1)),
+      update => update
+        .attr("x", d => xScale(d[xVar]))
+        .attr("y", d => yScale(d.NDVI) + 4),
+      exit => exit.remove()
+    );
+  }
+
+  updateDots();
 }
